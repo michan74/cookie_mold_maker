@@ -32,10 +32,30 @@ def save_image(image: np.ndarray, output_path: str) -> None:
     cv2.imwrite(output_path, image)
 
 
-def to_binary(gray_image: np.ndarray, threshold: int = 127) -> np.ndarray:
-    """グレースケール画像を二値化（ガウシアンブラーでノイズ除去のみ）"""
-    blurred = cv2.GaussianBlur(gray_image, (5, 5), 0)
+def to_binary(gray_image: np.ndarray, threshold: int = 180, blur_size: int = 9) -> np.ndarray:
+    """グレースケール画像を二値化
+
+    Args:
+        gray_image: グレースケール画像
+        threshold: 二値化の閾値（デフォルト180）
+        blur_size: ガウシアンブラーのカーネルサイズ（デフォルト9）
+
+    処理内容:
+        1. ガウシアンブラーでノイズ除去
+        2. 二値化
+        3. モルフォロジー演算（クロージング→オープニング）でノイズ除去
+    """
+    # 強めのぼかしでノイズ除去
+    blurred = cv2.GaussianBlur(gray_image, (blur_size, blur_size), 0)
+
+    # 二値化
     _, binary = cv2.threshold(blurred, threshold, 255, cv2.THRESH_BINARY_INV)
+
+    # モルフォロジー演算でノイズ除去
+    kernel = np.ones((3, 3), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)  # 小さな穴を埋める
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)   # 小さなノイズを除去
+
     return binary
 
 
