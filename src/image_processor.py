@@ -27,48 +27,15 @@ def to_grayscale(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
-def remove_colored_lines(image: np.ndarray, saturation_threshold: int = 30) -> np.ndarray:
-    """色付きの線を除去し、黒い線（鉛筆・ボールペン）だけ残す
-
-    HSV色空間で:
-    - 黒い線 = 彩度(S)が低い + 明度(V)が低い
-    - 色付き線 = 彩度(S)が高い（ピンク、青など）
-    """
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-
-    # 彩度が低い（黒/グレー）ピクセルだけマスク
-    # 彩度が高い = 色付き = 除去対象
-    gray_mask = s < saturation_threshold
-
-    # 結果画像（白背景）
-    result = np.full_like(v, 255)
-
-    # 黒い線の部分だけ元の明度を使用
-    result[gray_mask] = v[gray_mask]
-
-    return result
-
-
 def save_image(image: np.ndarray, output_path: str) -> None:
     """画像を保存"""
     cv2.imwrite(output_path, image)
 
 
 def to_binary(gray_image: np.ndarray, threshold: int = 127) -> np.ndarray:
-    """グレースケール画像を二値化"""
-    # ガウシアンブラーでノイズ除去
+    """グレースケール画像を二値化（ガウシアンブラーでノイズ除去のみ）"""
     blurred = cv2.GaussianBlur(gray_image, (5, 5), 0)
-
-    # 適応的閾値処理（照明ムラに強い）
-    binary = cv2.adaptiveThreshold(
-        blurred,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        11,
-        2
-    )
+    _, binary = cv2.threshold(blurred, threshold, 255, cv2.THRESH_BINARY_INV)
     return binary
 
 
