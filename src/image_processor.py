@@ -60,3 +60,37 @@ def get_largest_contour(contours: list) -> np.ndarray:
     if not contours:
         return None
     return max(contours, key=cv2.contourArea)
+
+
+def export_contours_to_svg(
+    contours: list,
+    output_path: str,
+    width: int,
+    height: int,
+    epsilon_ratio: float = 0.01,
+) -> None:
+    """輪郭をSVGファイルに書き出す"""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    paths_d = []
+    for contour in contours:
+        if len(contour) < 3:
+            continue
+        simplified = simplify_contour(contour, epsilon_ratio)
+        points = simplified.reshape(-1, 2)
+        d = f"M {points[0][0]:.1f} {points[0][1]:.1f}"
+        for i in range(1, len(points)):
+            d += f" L {points[i][0]:.1f} {points[i][1]:.1f}"
+        d += " Z"
+        paths_d.append(d)
+
+    svg = f'''<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}">
+  <g fill="none" stroke="black" stroke-width="1">
+'''
+    for d in paths_d:
+        svg += f'    <path d="{d}"/>\n'
+    svg += "  </g>\n</svg>\n"
+
+    path.write_text(svg, encoding="utf-8")
