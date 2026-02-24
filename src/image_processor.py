@@ -171,18 +171,16 @@ def export_contours_to_svg(
     width: int,
     height: int,
     epsilon_ratio: float = 0.01,
-    smooth: bool = True,
     smoothing: float = 0.2,
 ) -> None:
-    """輪郭をSVGファイルに書き出す
+    """輪郭をSVGファイルに書き出す（ベジェ曲線で滑らかに）
 
     Args:
         contours: 輪郭のリスト
         output_path: 出力ファイルパス
         width: SVGの幅
         height: SVGの高さ
-        epsilon_ratio: 輪郭簡略化の係数
-        smooth: Trueならベジェ曲線で滑らかに、Falseなら直線
+        epsilon_ratio: 輪郭簡略化の係数（0またはNoneで簡略化を無効化）
         smoothing: ベジェ曲線の滑らかさ係数（0.1〜0.3）
     """
     path = Path(output_path)
@@ -192,14 +190,17 @@ def export_contours_to_svg(
     for contour in contours:
         if len(contour) < 3:
             continue
-        simplified = simplify_contour(contour, epsilon_ratio)
-        points = simplified.reshape(-1, 2)
 
-        if smooth and len(points) >= 3:
-            # ベジェ曲線で滑らかに
+        # epsilon_ratioが0またはNoneの場合は簡略化をスキップ
+        if epsilon_ratio:
+            simplified = simplify_contour(contour, epsilon_ratio)
+            points = simplified.reshape(-1, 2)
+        else:
+            points = contour.reshape(-1, 2)
+
+        if len(points) >= 3:
             d = points_to_bezier_path(points, smoothing)
         else:
-            # 直線で接続
             d = f"M {points[0][0]:.1f} {points[0][1]:.1f}"
             for i in range(1, len(points)):
                 d += f" L {points[i][0]:.1f} {points[i][1]:.1f}"
