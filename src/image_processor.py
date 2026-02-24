@@ -82,14 +82,109 @@ def get_largest_contour(contours: list) -> np.ndarray:
     return max(contours, key=cv2.contourArea)
 
 
+def calculate_control_points(points: np.ndarray, smoothing: float = 0.2) -> list:
+    """Catmull-Rom風のアルゴリズムで制御点を計算
+
+    Args:
+        points: 輪郭の点の配列 [(x1,y1), (x2,y2), ...]
+        smoothing: 滑らかさの係数（0.1〜0.3が一般的）
+
+    Returns:
+        各点の制御点リスト [(ctrl1_x, ctrl1_y, ctrl2_x, ctrl2_y), ...]
+    """
+    n = len(points)
+    control_points = []
+
+    for i in range(n):
+        # 前の点、現在の点、次の点を取得（ループするので % n）
+        p_prev = points[(i - 1) % n]
+        p_curr = points[i]
+        p_next = points[(i + 1) % n]
+
+        # 方向ベクトル（前の点から次の点へ）
+        direction = p_next - p_prev
+
+        # 角度に応じて係数を調整
+        # 急カーブほど係数を小さく
+        v1 = p_curr - p_prev
+        v2 = p_next - p_curr
+        len1 = np.linalg.norm(v1)
+        len2 = np.linalg.norm(v2)
+
+        if len1 > 0 and len2 > 0:
+            # 内積からcos(角度)を計算
+            cos_angle = np.dot(v1, v2) / (len1 * len2)
+            cos_angle = np.clip(cos_angle, -1, 1)
+            # 角度が急なほど係数を小さく（0.5〜1.0の範囲で調整）
+            angle_factor = (1 + cos_angle) / 2  # 0〜1の範囲
+            adjusted_smoothing = smoothing * (0.5 + 0.5 * angle_factor)
+        else:
+            adjusted_smoothing = smoothing
+
+        # 制御点を計算
+        ctrl1 = p_curr - direction * adjusted_smoothing
+        ctrl2 = p_curr + direction * adjusted_smoothing
+
+        control_points.append((ctrl1[0], ctrl1[1], ctrl2[0], ctrl2[1]))
+
+    return control_points
+
+
+def points_to_bezier_path(points: np.ndarray, smoothing: float = 0.2) -> str:
+    """点列からベジェ曲線のSVGパスを生成
+
+    Args:
+        points: 輪郭の点の配列
+        smoothing: 滑らかさの係数
+
+    Returns:
+        SVGのpath d属性の文字列
+    """
+    if len(points) < 3:
+        return ""
+
+    control_points = calculate_control_points(points, smoothing)
+    n = len(points)
+
+    # 開始点
+    d = f"M {points[0][0]:.1f} {points[0][1]:.1f}"
+
+    # 各点をベジェ曲線で接続
+    for i in range(n):
+        # 現在の点の「出口」制御点
+        _, _, ctrl1_x, ctrl1_y = control_points[i]
+        # 次の点の「入口」制御点
+        next_i = (i + 1) % n
+        ctrl2_x, ctrl2_y, _, _ = control_points[next_i]
+        # 次の点
+        end_x, end_y = points[next_i]
+
+        # C = 3次ベジェ曲線（制御点2つ + 終点）
+        d += f" C {ctrl1_x:.1f} {ctrl1_y:.1f}, {ctrl2_x:.1f} {ctrl2_y:.1f}, {end_x:.1f} {end_y:.1f}"
+
+    return d
+
+
 def export_contours_to_svg(
     contours: list,
     output_path: str,
     width: int,
     height: int,
     epsilon_ratio: float = 0.01,
+    smooth: bool = True,
+    smoothing: float = 0.2,
 ) -> None:
-    """輪郭をSVGファイルに書き出す"""
+    """輪郭をSVGファイルに書き出す
+
+    Args:
+        contours: 輪郭のリスト
+        output_path: 出力ファイルパス
+        width: SVGの幅
+        height: SVGの高さ
+        epsilon_ratio: 輪郭簡略化の係数
+        smooth: Trueならベジェ曲線で滑らかに、Falseなら直線
+        smoothing: ベジェ曲線の滑らかさ係数（0.1〜0.3）
+    """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -99,10 +194,17 @@ def export_contours_to_svg(
             continue
         simplified = simplify_contour(contour, epsilon_ratio)
         points = simplified.reshape(-1, 2)
-        d = f"M {points[0][0]:.1f} {points[0][1]:.1f}"
-        for i in range(1, len(points)):
-            d += f" L {points[i][0]:.1f} {points[i][1]:.1f}"
-        d += " Z"
+
+        if smooth and len(points) >= 3:
+            # ベジェ曲線で滑らかに
+            d = points_to_bezier_path(points, smoothing)
+        else:
+            # 直線で接続
+            d = f"M {points[0][0]:.1f} {points[0][1]:.1f}"
+            for i in range(1, len(points)):
+                d += f" L {points[i][0]:.1f} {points[i][1]:.1f}"
+            d += " Z"
+
         paths_d.append(d)
 
     svg = f'''<?xml version="1.0" encoding="UTF-8"?>

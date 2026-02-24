@@ -6,26 +6,112 @@ import trimesh
 from pathlib import Path
 
 
-def parse_svg_path(svg_path: str) -> list:
-    """SVGのpath要素のd属性をパースして座標リストに変換
-
-    対応コマンド: M (moveto), L (lineto), Z (closepath)
+def cubic_bezier_point(p0, p1, p2, p3, t):
+    """3次ベジェ曲線上の点を計算
 
     Args:
-        svg_path: SVGのd属性値 (例: "M 100 100 L 200 100 L 200 200 Z")
+        p0, p1, p2, p3: 制御点 (x, y)
+        t: パラメータ (0.0 ~ 1.0)
+
+    Returns:
+        (x, y) 曲線上の点
+    """
+    x = (1-t)**3 * p0[0] + 3*(1-t)**2*t * p1[0] + 3*(1-t)*t**2 * p2[0] + t**3 * p3[0]
+    y = (1-t)**3 * p0[1] + 3*(1-t)**2*t * p1[1] + 3*(1-t)*t**2 * p2[1] + t**3 * p3[1]
+    return (x, y)
+
+
+def sample_bezier_curve(p0, p1, p2, p3, num_samples=10):
+    """ベジェ曲線を複数の点でサンプリング
+
+    Args:
+        p0, p1, p2, p3: 制御点
+        num_samples: サンプリング数
+
+    Returns:
+        曲線上の点のリスト
+    """
+    points = []
+    for i in range(num_samples):
+        t = i / num_samples
+        points.append(cubic_bezier_point(p0, p1, p2, p3, t))
+    return points
+
+
+def parse_svg_path(svg_path: str, bezier_samples: int = 30) -> list:
+    """SVGのpath要素のd属性をパースして座標リストに変換
+
+    対応コマンド: M (moveto), L (lineto), C (cubic bezier), Z (closepath)
+
+    Args:
+        svg_path: SVGのd属性値
+        bezier_samples: ベジェ曲線1つあたりのサンプリング数
 
     Returns:
         座標のリスト [(x1, y1), (x2, y2), ...]
     """
-    # 数値を抽出（M, L, Zなどのコマンドは無視）
-    numbers = re.findall(r'[-+]?\d*\.?\d+', svg_path)
-
-    # 2つずつペアにして座標に変換
     coords = []
-    for i in range(0, len(numbers) - 1, 2):
-        x = float(numbers[i])
-        y = float(numbers[i + 1])
-        coords.append((x, y))
+    current_pos = (0, 0)
+
+    # コマンドと数値を分離
+    # M, L, C, Z とその後の数値をマッチ
+    tokens = re.findall(r'([MLCZ])|(-?\d+\.?\d*)', svg_path)
+
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+
+        if token[0] == 'M':  # MoveTo
+            i += 1
+            x = float(tokens[i][1])
+            i += 1
+            y = float(tokens[i][1])
+            current_pos = (x, y)
+            coords.append(current_pos)
+            i += 1
+
+        elif token[0] == 'L':  # LineTo
+            i += 1
+            x = float(tokens[i][1])
+            i += 1
+            y = float(tokens[i][1])
+            current_pos = (x, y)
+            coords.append(current_pos)
+            i += 1
+
+        elif token[0] == 'C':  # Cubic Bezier
+            i += 1
+            # 制御点1
+            c1x = float(tokens[i][1])
+            i += 1
+            c1y = float(tokens[i][1])
+            i += 1
+            # 制御点2
+            c2x = float(tokens[i][1])
+            i += 1
+            c2y = float(tokens[i][1])
+            i += 1
+            # 終点
+            ex = float(tokens[i][1])
+            i += 1
+            ey = float(tokens[i][1])
+
+            # ベジェ曲線をサンプリング
+            p0 = current_pos
+            p1 = (c1x, c1y)
+            p2 = (c2x, c2y)
+            p3 = (ex, ey)
+            sampled = sample_bezier_curve(p0, p1, p2, p3, bezier_samples)
+            coords.extend(sampled)
+
+            current_pos = (ex, ey)
+            i += 1
+
+        elif token[0] == 'Z':  # ClosePath
+            i += 1
+
+        else:
+            i += 1
 
     return coords
 

@@ -5,4 +5,12 @@ services:
       - .:/app
       - ./input:/app/input
       - ./output:/app/output
+      - ./secret:/app/secret:ro
     working_dir: /app
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/secret/credentials.json
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
