@@ -143,6 +143,111 @@ def load_svg_paths(svg_file: str) -> list:
     return paths
 
 
+def create_stamp_base(
+    outline: list,
+    plate_thickness: float = 3.0,
+    plate_offset: float = 1.0,
+    handle_size: float = 10.0,
+    handle_height: float = 15.0
+) -> trimesh.Trimesh:
+    """スタンプの基礎（板＋取手）を作成
+
+    Args:
+        outline: 輪郭の座標リスト [(x1, y1), (x2, y2), ...]
+        plate_thickness: 板の厚さ (mm)
+        plate_offset: 輪郭から内側にオフセットする距離 (mm)
+        handle_size: 取手の一辺のサイズ (mm)
+        handle_height: 取手の高さ (mm)
+
+    Returns:
+        trimesh.Trimesh オブジェクト
+    """
+    from shapely.geometry import Polygon, box
+
+    # 輪郭からポリゴンを作成し、内側にオフセット
+    base_polygon = Polygon(outline)
+    plate_polygon = base_polygon.buffer(-plate_offset)
+
+    if plate_polygon.is_empty:
+        raise ValueError("オフセット後のポリゴンが空になりました。オフセット値が大きすぎます。")
+
+    # 板を押し出し
+    plate_mesh = trimesh.creation.extrude_polygon(plate_polygon, plate_thickness)
+
+    # 取手を作成（板の重心位置に配置）
+    centroid = plate_polygon.centroid
+    half_size = handle_size / 2
+    handle_polygon = box(
+        centroid.x - half_size,
+        centroid.y - half_size,
+        centroid.x + half_size,
+        centroid.y + half_size
+    )
+    handle_mesh = trimesh.creation.extrude_polygon(handle_polygon, handle_height)
+
+    # 取手を板の上に移動
+    handle_mesh.apply_translation([0, 0, plate_thickness])
+
+    # 板と取手を結合
+    combined = trimesh.util.concatenate([plate_mesh, handle_mesh])
+
+    return combined
+
+
+def create_stamp_relief(
+    paths: list,
+    relief_height: float = 1.5,
+    line_width: float = 1.0
+) -> trimesh.Trimesh:
+    """スタンプの凸部分（レリーフ）を作成
+
+    Args:
+        paths: パスのリスト [[(x1,y1),...], [(x1,y1),...], ...]
+        relief_height: 凸部分の高さ (mm)
+        line_width: 線の幅 (mm)
+
+    Returns:
+        trimesh.Trimesh オブジェクト
+    """
+    from shapely.geometry import LineString, MultiPolygon
+    from shapely.ops import unary_union
+
+    relief_polygons = []
+
+    for path in paths:
+        if len(path) < 2:
+            continue
+
+        # パスをLineStringとして作成し、バッファで幅を持たせる
+        line = LineString(path)
+        buffered = line.buffer(line_width / 2, cap_style=2, join_style=2)
+
+        if not buffered.is_empty:
+            relief_polygons.append(buffered)
+
+    if not relief_polygons:
+        return None
+
+    # すべてのポリゴンを結合
+    combined_polygon = unary_union(relief_polygons)
+
+    if combined_polygon.is_empty:
+        return None
+
+    # MultiPolygonの場合は個別に処理
+    if isinstance(combined_polygon, MultiPolygon):
+        meshes = []
+        for poly in combined_polygon.geoms:
+            if not poly.is_empty:
+                mesh = trimesh.creation.extrude_polygon(poly, relief_height)
+                meshes.append(mesh)
+        if meshes:
+            return trimesh.util.concatenate(meshes)
+        return None
+    else:
+        return trimesh.creation.extrude_polygon(combined_polygon, relief_height)
+
+
 def create_cookie_cutter(
     outline: list,
     height: float = 10.0,
@@ -233,3 +338,97 @@ def svg_to_stl(
 
     # STLとして保存
     export_stl(mesh, output_file)
+
+
+def svg_to_stamp_stl(
+    contour_svg_file: str,
+    stamp_svg_file: str,
+    output_file: str,
+    target_size: float = 50.0,
+    plate_thickness: float = 3.0,
+    plate_offset: float = 1.0,
+    handle_size: float = 10.0,
+    handle_height: float = 15.0,
+    relief_height: float = 1.5,
+    line_width: float = 1.0
+) -> None:
+    """SVGファイルからスタンプのSTLを生成
+
+    Args:
+        contour_svg_file: 輪郭SVGファイル（スタンプの板の形状）
+        stamp_svg_file: スタンプ用SVGファイル（凸部分のパターン）
+        output_file: 出力STLファイル
+        target_size: スタンプの最大サイズ (mm)
+        plate_thickness: 板の厚さ (mm)
+        plate_offset: 輪郭から内側にオフセットする距離 (mm)
+        handle_size: 取手の一辺のサイズ (mm)
+        handle_height: 取手の高さ (mm)
+        relief_height: 凸部分の高さ (mm)
+        line_width: 凸部分の線幅 (mm)
+    """
+    # 輪郭SVGを読み込み
+    contour_paths = load_svg_paths(contour_svg_file)
+    if not contour_paths:
+        raise ValueError("輪郭SVGファイルにパスが見つかりません")
+
+    # スタンプ用SVGを読み込み
+    stamp_paths = load_svg_paths(stamp_svg_file)
+
+    # メインの輪郭を取得
+    main_contour = max(contour_paths, key=len)
+
+    # スケール計算
+    coords = np.array(main_contour)
+    width = coords[:, 0].max() - coords[:, 0].min()
+    height_2d = coords[:, 1].max() - coords[:, 1].min()
+    max_dim = max(width, height_2d)
+    scale = target_size / max_dim
+
+    # 中心座標
+    center_x = (coords[:, 0].max() + coords[:, 0].min()) / 2
+    center_y = (coords[:, 1].max() + coords[:, 1].min()) / 2
+
+    # 輪郭をスケール＆中心に移動
+    scaled_contour = [
+        ((x - center_x) * scale, (y - center_y) * scale)
+        for x, y in main_contour
+    ]
+
+    # スタンプ用パスをスケール＆中心に移動
+    scaled_stamp_paths = []
+    for path in stamp_paths:
+        scaled_path = [
+            ((x - center_x) * scale, (y - center_y) * scale)
+            for x, y in path
+        ]
+        scaled_stamp_paths.append(scaled_path)
+
+    # スタンプ基礎を作成
+    base_mesh = create_stamp_base(
+        scaled_contour,
+        plate_thickness=plate_thickness,
+        plate_offset=plate_offset,
+        handle_size=handle_size,
+        handle_height=handle_height
+    )
+
+    # スタンプ凸部分を作成
+    meshes = [base_mesh]
+
+    if scaled_stamp_paths:
+        relief_mesh = create_stamp_relief(
+            scaled_stamp_paths,
+            relief_height=relief_height,
+            line_width=line_width
+        )
+        if relief_mesh is not None:
+            # 凸部分をZ=0の位置に配置（板の下面）
+            # スタンプは押すときに下向きになるので、凸部分は板の下に配置
+            relief_mesh.apply_translation([0, 0, -relief_height])
+            meshes.append(relief_mesh)
+
+    # すべてのメッシュを結合
+    combined = trimesh.util.concatenate(meshes)
+
+    # STLとして保存
+    export_stl(combined, output_file)

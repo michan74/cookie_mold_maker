@@ -11,7 +11,7 @@ from src.image_processor import (
     get_largest_contour,
     export_contours_to_svg,
 )
-from src.stl_generator import svg_to_stl
+from src.stl_generator import svg_to_stl, svg_to_stamp_stl
 
 
 def process_image(
@@ -19,11 +19,17 @@ def process_image(
     output_dir: str = "output",
     all_contours: bool = False,
     generate_stl: bool = True,
+    generate_stamp: bool = True,
     stl_height: float = 10.0,
     stl_wall_thickness: float = 1.0,
     stl_target_size: float = 50.0,
     epsilon_ratio: float = 0.01,
     smoothing: float = 0.2,
+    stamp_plate_thickness: float = 3.0,
+    stamp_handle_size: float = 10.0,
+    stamp_handle_height: float = 15.0,
+    stamp_relief_height: float = 1.5,
+    stamp_line_width: float = 1.0,
 ):
     """画像からクッキー型を生成
 
@@ -32,29 +38,53 @@ def process_image(
         output_dir: 出力ディレクトリ
         all_contours: すべての輪郭を出力するか
         generate_stl: STLファイルを生成するか
+        generate_stamp: スタンプSTLを生成するか
         stl_height: STLの高さ(mm)
         stl_wall_thickness: STLの壁の厚さ(mm)
         stl_target_size: STLの目標サイズ(mm)
         epsilon_ratio: 輪郭簡略化の係数（0で簡略化を無効化）
         smoothing: スムージングの強さ
+        stamp_plate_thickness: スタンプ板の厚さ(mm)
+        stamp_handle_size: スタンプ取手の一辺(mm)
+        stamp_handle_height: スタンプ取手の高さ(mm)
+        stamp_relief_height: スタンプ凸部分の高さ(mm)
+        stamp_line_width: スタンプ凸部分の線幅(mm)
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     name = Path(image_path).stem
 
-    # Step 1: AI前処理（背景削除）
-    print("=== Step 1: AI前処理（背景削除）===")
-    from src.ai_preprocessor import preprocess_step1_clean, preprocess_step2_contour
-    step1_path = output_path / f"{name}_step1.png"
-    preprocess_step1_clean(image_path, str(step1_path))
+    # Step 1: 背景削除
+    print("=== Step 1: 背景削除 ===")
+    from src.ai_preprocessor import remove_background, normalize_lines, extract_contour, extract_stamp
+    step1_path = output_path / f"{name}_step1_bg_removed.png"
+    remove_background(image_path, str(step1_path))
 
-    # Step 2: クッキー型用枠の抽出
-    print("=== Step 2: クッキー型用枠の抽出 ===")
-    step2_path = output_path / f"{name}_step2.png"
-    preprocess_step2_contour(str(step1_path), str(step2_path))
-    image_path = str(step2_path)
+    # Step 2: 線の正規化
+    print("=== Step 2: 線の正規化 ===")
+    step2_path = output_path / f"{name}_step2_normalized.png"
+    normalize_lines(str(step1_path), str(step2_path))
 
-    # Step 2: 画像処理
+    # Step 3: クッキー型用枠の抽出
+    print("=== Step 3: クッキー型用枠の抽出 ===")
+    step3_path = output_path / f"{name}_step3_contour.png"
+    extract_contour(str(step2_path), str(step3_path))
+
+    # Step 4: スタンプ用画像の生成（スタンプ生成時のみ）
+    step4_path = None
+    if generate_stamp:
+        print("=== Step 4: スタンプ用画像の生成 ===")
+        step4_raw_path = output_path / f"{name}_step4_stamp_raw.png"
+        extract_stamp(str(step2_path), str(step3_path), str(step4_raw_path))
+
+        # Step 5: スタンプ用画像の正規化
+        print("=== Step 5: スタンプ用画像の正規化 ===")
+        step4_path = output_path / f"{name}_step4_stamp.png"
+        normalize_lines(str(step4_raw_path), str(step4_path))
+
+    image_path = str(step3_path)
+
+    # 画像処理
     print("=== 画像処理 ===")
     image = load_image(image_path)
     gray = to_grayscale(image)
@@ -73,8 +103,8 @@ def process_image(
         largest = get_largest_contour(contours)
         contours_to_export = [largest] if largest is not None else []
 
-    # Step 3: SVG出力
-    print("=== SVG出力 ===")
+    # Step 4: SVG出力（クッキー型用）
+    print("=== SVG出力（クッキー型用）===")
     svg_path = output_path / f"{name}.svg"
     export_contours_to_svg(
         contours_to_export,
@@ -86,9 +116,33 @@ def process_image(
     )
     print(f"SVG保存: {svg_path}")
 
-    # Step 4: STL生成（オプション）
+    # スタンプ用SVG生成
+    stamp_svg_path = None
+    if generate_stamp and step4_path:
+        print("=== SVG出力（スタンプ用）===")
+        stamp_image = load_image(str(step4_path))
+        stamp_gray = to_grayscale(stamp_image)
+        stamp_binary = to_binary(stamp_gray, threshold=200, blur_size=5)
+        stamp_contours = find_contours(stamp_binary)
+
+        if stamp_contours:
+            print(f"スタンプ用輪郭: {len(stamp_contours)}個")
+            stamp_svg_path = output_path / f"{name}_stamp.svg"
+            export_contours_to_svg(
+                stamp_contours,
+                str(stamp_svg_path),
+                width=stamp_image.shape[1],
+                height=stamp_image.shape[0],
+                epsilon_ratio=epsilon_ratio,
+                smoothing=smoothing,
+            )
+            print(f"スタンプ用SVG保存: {stamp_svg_path}")
+
+    results = []
+
+    # Step 5: クッキー型STL生成
     if generate_stl:
-        print("=== STL生成 ===")
+        print("=== クッキー型STL生成 ===")
         stl_path = output_path / f"{name}.stl"
         svg_to_stl(
             str(svg_path),
@@ -97,10 +151,29 @@ def process_image(
             wall_thickness=stl_wall_thickness,
             target_size=stl_target_size,
         )
-        print(f"STL保存: {stl_path}")
-        return str(stl_path)
+        print(f"クッキー型STL保存: {stl_path}")
+        results.append(str(stl_path))
 
-    return str(svg_path)
+    # Step 6: スタンプSTL生成
+    if generate_stamp and stamp_svg_path:
+        print("=== スタンプSTL生成 ===")
+        stamp_stl_path = output_path / f"{name}_stamp.stl"
+        svg_to_stamp_stl(
+            str(svg_path),
+            str(stamp_svg_path),
+            str(stamp_stl_path),
+            target_size=stl_target_size,
+            plate_thickness=stamp_plate_thickness,
+            plate_offset=1.0,
+            handle_size=stamp_handle_size,
+            handle_height=stamp_handle_height,
+            relief_height=stamp_relief_height,
+            line_width=stamp_line_width,
+        )
+        print(f"スタンプSTL保存: {stamp_stl_path}")
+        results.append(str(stamp_stl_path))
+
+    return results if results else str(svg_path)
 
 
 def main():
@@ -117,6 +190,13 @@ def main():
     parser.add_argument("--no-simplify", action="store_true", help="輪郭の簡略化を無効化（ピクセル単位の詳細な輪郭を使用）")
     parser.add_argument("--epsilon", type=float, default=0.01, help="輪郭簡略化の係数（小さいほど詳細）")
     parser.add_argument("--smoothing", type=float, default=0.2, help="スムージングの強さ")
+    # スタンプオプション
+    parser.add_argument("--no-stamp", action="store_true", help="スタンプ生成をスキップ")
+    parser.add_argument("--stamp-plate", type=float, default=3.0, help="スタンプ板の厚さ(mm)")
+    parser.add_argument("--stamp-handle-size", type=float, default=10.0, help="スタンプ取手の一辺(mm)")
+    parser.add_argument("--stamp-handle-height", type=float, default=15.0, help="スタンプ取手の高さ(mm)")
+    parser.add_argument("--stamp-relief", type=float, default=1.5, help="スタンプ凸部分の高さ(mm)")
+    parser.add_argument("--stamp-line-width", type=float, default=1.0, help="スタンプ凸部分の線幅(mm)")
 
     args = parser.parse_args()
 
@@ -129,17 +209,27 @@ def main():
         output_dir=args.output,
         all_contours=args.all_contours,
         generate_stl=not args.no_stl,
+        generate_stamp=not args.no_stamp,
         stl_height=args.height,
         stl_wall_thickness=args.wall,
         stl_target_size=args.size,
         epsilon_ratio=0 if args.no_simplify else args.epsilon,
         smoothing=args.smoothing,
+        stamp_plate_thickness=args.stamp_plate,
+        stamp_handle_size=args.stamp_handle_size,
+        stamp_handle_height=args.stamp_handle_height,
+        stamp_relief_height=args.stamp_relief,
+        stamp_line_width=args.stamp_line_width,
     )
 
     if result:
         print()
-        print(f"=== 完了 ===")
-        print(f"出力: {result}")
+        print("=== 完了 ===")
+        if isinstance(result, list):
+            for r in result:
+                print(f"出力: {r}")
+        else:
+            print(f"出力: {result}")
 
 
 if __name__ == "__main__":

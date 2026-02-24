@@ -55,11 +55,20 @@ def _generate_image(
     )
 
     if response.candidates:
-        for part in response.candidates[0].content.parts:
-            if part.inline_data:
-                return part.inline_data.data
+        candidate = response.candidates[0]
+        if candidate.content and candidate.content.parts:
+            for part in candidate.content.parts:
+                if part.inline_data:
+                    return part.inline_data.data
+        # コンテンツがない場合の詳細情報
+        finish_reason = getattr(candidate, 'finish_reason', None)
+        safety_ratings = getattr(candidate, 'safety_ratings', None)
+        raise ValueError(
+            f"AIからの画像レスポンスを取得できませんでした。"
+            f"finish_reason: {finish_reason}, safety_ratings: {safety_ratings}"
+        )
 
-    raise ValueError("AIからの画像レスポンスを取得できませんでした")
+    raise ValueError("AIからの画像レスポンスを取得できませんでした（candidatesが空）")
 
 
 def _save_image(image_data: bytes, output_path: str) -> str:
@@ -72,18 +81,15 @@ def _save_image(image_data: bytes, output_path: str) -> str:
     return str(output_file)
 
 
-def preprocess_step1_clean(
+def remove_background(
     image_path: str,
     output_path: str,
     model_name: str = "gemini-2.5-flash-image"
 ) -> str:
-    """画像下処理1: 背景削除
+    """背景削除
 
     - 方眼用紙などの背景を削除
     - 背景は白一色にする
-    - 線はなめらかな曲線にする
-    - 枠の部分は黒色で均等な太さにする
-    - 線の端の跳ねやはみ出しを処理して綺麗にする
 
     Args:
         image_path: 入力画像のパス
@@ -107,11 +113,9 @@ def preprocess_step1_clean(
     prompt = """画像下処理: 背景削除
 
 要件:
-- 方眼用紙などの背景を削除する
+- 方眼用紙などの背景のみを削除する
 - 背景は純粋な白(#FFFFFF)にする
-- クッキー型にするために線は、なめらかな曲線にする
-- 枠の部分は黒色(#000000)で均等な太さにする
-- 線の端の跳ねやはみ出しを処理して、線の端を綺麗に処理する
+- それ以外は何も変更しない
 
 画像のみを出力してください。"""
 
@@ -124,19 +128,19 @@ def preprocess_step1_clean(
     return _save_image(image_data, output_path)
 
 
-def preprocess_step2_contour(
+def normalize_lines(
     image_path: str,
     output_path: str,
     model_name: str = "gemini-2.5-flash-image"
 ) -> str:
-    """画像下処理2: クッキー型用枠
+    """線の正規化
 
-    - 一番外側の輪郭のみを抽出
-    - 一筆書きで描ける閉じた形状にする
-    - 内部の線、文字、模様は全て削除
+    - 全ての線を黒に統一
+    - 薄い線も含めて全て保持
+    - ノイズ除去
 
     Args:
-        image_path: 入力画像のパス（step1で処理済みの画像）
+        image_path: 入力画像のパス（背景削除済みの画像）
         output_path: 出力画像のパス
         model_name: 使用するモデル名
 
@@ -154,16 +158,13 @@ def preprocess_step2_contour(
 
     mime_type = _get_mime_type(path)
 
-    prompt = """画像下処理: クッキー型用枠の抽出
+    prompt = """画像下処理: 線の正規化
 
 要件:
-- 渡された画像から一番外側の輪郭(クッキー型にする部分)となる部分のみを抜き出す
-- 一筆書きで描ける閉じた形状にする（完全に閉じた1本の輪郭線のみ）
-- 内部を横切る線は全て削除する
-- それ以外の部分（文字、模様、内側の線など）は全て削除する
-- 背景は純粋な白(#FFFFFF)にする
-- 輪郭線は黒(#000000)にする
-- 輪郭線は滑らかにし、均等な太さにする
+- 全ての線を黒(#000000)に統一する
+- 背景は純粋な白(#FFFFFF)のまま維持する
+- 線のノイズ（端の細いひげ、意図しない飛び出し）は除去する
+- 元の画像にない線を追加しないこと
 
 画像のみを出力してください。"""
 
@@ -176,26 +177,92 @@ def preprocess_step2_contour(
     return _save_image(image_data, output_path)
 
 
-def preprocess_step3_stamp(
+def extract_contour(
     image_path: str,
-    contour_image_path: str,
     output_path: str,
     model_name: str = "gemini-2.5-flash-image"
 ) -> str:
-    """画像下処理3: スタンプ用
+    """輪郭抽出（クッキー型用）
 
-    - クッキー型用枠を削除
-    - それ以外の全ての要素（文字、内部の模様など）を残す
+    - 一番外側の輪郭のみを抽出
+    - 一筆書きで描ける閉じた形状にする
+    - 内部の線、文字、模様は全て削除
 
     Args:
-        image_path: 入力画像のパス（step1で処理済みの画像）
-        contour_image_path: クッキー型用輪郭画像のパス（step2で生成した画像）
+        image_path: 入力画像のパス（線の正規化済みの画像）
         output_path: 出力画像のパス
         model_name: 使用するモデル名
 
     Returns:
         出力画像のパス
     """
+    path = Path(image_path)
+    if not path.exists():
+        raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
+
+    client = init_genai()
+
+    with open(image_path, "rb") as f:
+        image_bytes = f.read()
+
+    mime_type = _get_mime_type(path)
+
+    prompt = """クッキー型の輪郭抽出
+
+この画像の「シルエット」の輪郭線だけを描いてください。
+
+やること:
+1. 図形全体を黒く塗りつぶしたと想像する
+2. その塗りつぶした形の外周線だけを描く
+
+出力する線:
+- 図形の一番外側の境界線のみ（1本の閉じた線）
+
+削除するもの:
+- 内部の線（縦線、横線、斜め線など全て）
+- 文字
+- 模様
+- 図形の中にあるもの全て
+
+出力形式:
+- 背景: 白(#FFFFFF)
+- 輪郭線: 黒(#000000)
+- 線は滑らかで均等な太さ
+
+画像のみを出力してください。"""
+
+    contents = [
+        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+        prompt,
+    ]
+
+    image_data = _generate_image(client, contents, model_name)
+    return _save_image(image_data, output_path)
+
+
+def extract_stamp(
+    image_path: str,
+    contour_image_path: str,
+    output_path: str,
+    model_name: str = None  # 未使用（後方互換のため残す）
+) -> str:
+    """スタンプ抽出（外枠を除去）- OpenCV版
+
+    - 元画像から輪郭画像の線を差し引く
+    - 内部の要素（文字、模様など）のみを残す
+
+    Args:
+        image_path: 入力画像のパス（線の正規化済みの画像）
+        contour_image_path: クッキー型用輪郭画像のパス（extract_contourで生成した画像）
+        output_path: 出力画像のパス
+        model_name: 未使用（後方互換のため）
+
+    Returns:
+        出力画像のパス
+    """
+    import cv2
+    import numpy as np
+
     path = Path(image_path)
     contour_path = Path(contour_image_path)
     if not path.exists():
@@ -203,40 +270,30 @@ def preprocess_step3_stamp(
     if not contour_path.exists():
         raise FileNotFoundError(f"輪郭画像ファイルが見つかりません: {contour_image_path}")
 
-    client = init_genai()
+    # 画像を読み込み（グレースケール）
+    original = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    contour = cv2.imread(str(contour_path), cv2.IMREAD_GRAYSCALE)
 
-    with open(image_path, "rb") as f:
-        image_bytes = f.read()
-    with open(contour_image_path, "rb") as f:
-        contour_bytes = f.read()
+    # サイズを合わせる（必要な場合）
+    if original.shape != contour.shape:
+        contour = cv2.resize(contour, (original.shape[1], original.shape[0]))
 
-    mime_type = _get_mime_type(path)
-    contour_mime_type = _get_mime_type(contour_path)
+    # 二値化（白背景=255、黒線=0）
+    _, original_bin = cv2.threshold(original, 127, 255, cv2.THRESH_BINARY)
+    _, contour_bin = cv2.threshold(contour, 127, 255, cv2.THRESH_BINARY)
 
-    prompt = """画像下処理: スタンプ用
+    # 輪郭線を膨張させて確実に消す（線の太さの違いを吸収）
+    kernel = np.ones((5, 5), np.uint8)
+    contour_dilated = cv2.dilate(255 - contour_bin, kernel, iterations=2)
 
-2つの画像を提供します。
+    # 差分計算: 元画像の線から輪郭の線を除去
+    # 元画像の線（黒=0）で、輪郭にない部分を残す
+    result = cv2.bitwise_or(original_bin, contour_dilated)
 
-画像1: 処理済みの手書きイラスト（文字やディテールを含む）
-画像2: クッキー型用の輪郭線（削除すべき外側の輪郭）
+    # 出力
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(output_file), result)
+    print(f"保存: {output_file}")
 
-タスク:
-- 画像1から画像2に含まれる輪郭線を削除する
-- それ以外の全ての要素（文字、内部の模様など）を残す
-- 細すぎる線（クッキーに押すには不向きな線）は削除する
-- 線の端の跳ねやはみ出しを処理して、線の端を綺麗にする
-
-出力形式:
-- 背景: 純粋な白(#FFFFFF)
-- 残す線: 黒(#000000)
-
-画像のみを出力してください。"""
-
-    contents = [
-        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-        types.Part.from_bytes(data=contour_bytes, mime_type=contour_mime_type),
-        prompt,
-    ]
-
-    image_data = _generate_image(client, contents, model_name)
-    return _save_image(image_data, output_path)
+    return str(output_file)
