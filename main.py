@@ -56,7 +56,7 @@ def process_image(
 
     # Step 1: 背景削除
     print("=== Step 1: 背景削除 ===")
-    from src.ai_preprocessor import remove_background, normalize_lines, extract_contour, extract_stamp
+    from src.ai_preprocessor import remove_background, normalize_lines, separate_outline, extract_contour, extract_contour_cv, extract_stamp
     step1_path = output_path / f"{name}_step1_bg_removed.png"
     remove_background(image_path, str(step1_path))
 
@@ -65,24 +65,29 @@ def process_image(
     step2_path = output_path / f"{name}_step2_normalized.png"
     normalize_lines(str(step1_path), str(step2_path))
 
-    # Step 3: クッキー型用枠の抽出
-    print("=== Step 3: クッキー型用枠の抽出 ===")
-    step3_path = output_path / f"{name}_step3_contour.png"
-    extract_contour(str(step2_path), str(step3_path))
+    # Step 3: 外枠と内側の分離
+    print("=== Step 3: 外枠と内側の分離 ===")
+    step3_path = output_path / f"{name}_step3_separated.png"
+    separate_outline(str(step2_path), str(step3_path))
 
-    # Step 4: スタンプ用画像の生成（スタンプ生成時のみ）
-    step4_path = None
+    # Step 4: クッキー型用枠の抽出 (OpenCV版)
+    print("=== Step 4: クッキー型用枠の抽出 ===")
+    step4_path = output_path / f"{name}_step4_contour.png"
+    extract_contour_cv(str(step3_path), str(step4_path))
+
+    # Step 5: スタンプ用画像の生成（スタンプ生成時のみ）
+    step5_path = None
     if generate_stamp:
-        print("=== Step 4: スタンプ用画像の生成 ===")
-        step4_raw_path = output_path / f"{name}_step4_stamp_raw.png"
-        extract_stamp(str(step2_path), str(step3_path), str(step4_raw_path))
+        print("=== Step 5: スタンプ用画像の生成 ===")
+        step5_raw_path = output_path / f"{name}_step5_stamp_raw.png"
+        extract_stamp(str(step3_path), str(step4_path), str(step5_raw_path))
 
-        # Step 5: スタンプ用画像の正規化
-        print("=== Step 5: スタンプ用画像の正規化 ===")
-        step4_path = output_path / f"{name}_step4_stamp.png"
-        normalize_lines(str(step4_raw_path), str(step4_path))
+        # Step 6: スタンプ用画像の正規化
+        print("=== Step 6: スタンプ用画像の正規化 ===")
+        step5_path = output_path / f"{name}_step5_stamp.png"
+        normalize_lines(str(step5_raw_path), str(step5_path))
 
-    image_path = str(step3_path)
+    image_path = str(step4_path)
 
     # 画像処理
     print("=== 画像処理 ===")
@@ -118,9 +123,9 @@ def process_image(
 
     # スタンプ用SVG生成
     stamp_svg_path = None
-    if generate_stamp and step4_path:
+    if generate_stamp and step5_path:
         print("=== SVG出力（スタンプ用）===")
-        stamp_image = load_image(str(step4_path))
+        stamp_image = load_image(str(step5_path))
         stamp_gray = to_grayscale(stamp_image)
         stamp_binary = to_binary(stamp_gray, threshold=200, blur_size=5)
         stamp_contours = find_contours(stamp_binary)

@@ -177,6 +177,64 @@ def normalize_lines(
     return _save_image(image_data, output_path)
 
 
+def separate_outline(
+    image_path: str,
+    output_path: str,
+    model_name: str = "gemini-2.5-flash-image"
+) -> str:
+    """外枠と内側の線を分離
+
+    - 外枠と内側の線がつながっている部分を切り離す
+    - 外枠は閉じた状態を維持
+    - 内側の線は外枠から離れた状態にする
+
+    Args:
+        image_path: 入力画像のパス（線の正規化済みの画像）
+        output_path: 出力画像のパス
+        model_name: 使用するモデル名
+
+    Returns:
+        出力画像のパス
+    """
+    path = Path(image_path)
+    if not path.exists():
+        raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
+
+    client = init_genai()
+
+    with open(image_path, "rb") as f:
+        image_bytes = f.read()
+
+    mime_type = _get_mime_type(path)
+
+    prompt = """Image editing: Disconnect internal lines from outline
+
+Task:
+- Find where internal lines touch the outer boundary
+- Shorten the internal lines slightly to create a small gap
+- Do NOT modify the outer boundary shape at all
+
+Rules:
+- Do NOT add any new lines
+- Do NOT make lines thicker or thinner
+- Do NOT duplicate any lines
+- Keep all existing lines in their original positions
+
+Output:
+- Background: white (#FFFFFF)
+- Lines: black (#000000)
+
+Output image only."""
+
+    contents = [
+        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+        prompt,
+    ]
+
+    image_data = _generate_image(client, contents, model_name)
+    return _save_image(image_data, output_path)
+
+
 def extract_contour(
     image_path: str,
     output_path: str,
@@ -207,27 +265,26 @@ def extract_contour(
 
     mime_type = _get_mime_type(path)
 
-    prompt = """クッキー型の輪郭抽出
+    prompt = """画像編集: 外枠だけを残す
 
-この画像の「シルエット」の輪郭線だけを描いてください。
+この画像から、図形の一番外側の枠線だけを残してください。
 
-やること:
-1. 図形全体を黒く塗りつぶしたと想像する
-2. その塗りつぶした形の外周線だけを描く
-
-出力する線:
-- 図形の一番外側の境界線のみ（1本の閉じた線）
-
-削除するもの:
-- 内部の線（縦線、横線、斜め線など全て）
-- 文字
+消すもの:
+- 図形の中央を通る線（縦線、斜め線など）
+- 文字（「nuts」など）
 - 模様
-- 図形の中にあるもの全て
+- 外枠以外の全ての線
+
+残すもの:
+- 図形の外周を囲む線だけ（クッキー型の形になる部分）
+
+重要:
+- 外枠の線は元の位置・太さをそのまま維持する
+- 外枠は閉じた1本の線になるようにする
 
 出力形式:
 - 背景: 白(#FFFFFF)
-- 輪郭線: 黒(#000000)
-- 線は滑らかで均等な太さ
+- 外枠線: 黒(#000000)
 
 画像のみを出力してください。"""
 
@@ -238,6 +295,59 @@ def extract_contour(
 
     image_data = _generate_image(client, contents, model_name)
     return _save_image(image_data, output_path)
+
+
+def extract_contour_cv(
+    image_path: str,
+    output_path: str,
+) -> str:
+    """輪郭抽出（クッキー型用）- OpenCV版
+
+    - 一番外側の輪郭のみを抽出
+    - 位置・サイズを元画像と完全に一致させる
+
+    Args:
+        image_path: 入力画像のパス（線の正規化済みの画像）
+        output_path: 出力画像のパス
+
+    Returns:
+        出力画像のパス
+    """
+    import cv2
+    import numpy as np
+
+    path = Path(image_path)
+    if not path.exists():
+        raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
+
+    # 画像を読み込み
+    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+
+    # 二値化（白背景=255、黒線=0）
+    _, binary = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY_INV)
+
+    # 輪郭検出
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        raise ValueError("輪郭が検出されませんでした")
+
+    # 最大面積の輪郭を取得（外枠）
+    largest_contour = max(contours, key=cv2.contourArea)
+
+    # 結果画像を作成（白背景）
+    result = np.ones_like(image) * 255
+
+    # 外枠のみを描画（黒線）
+    cv2.drawContours(result, [largest_contour], -1, 0, 2)
+
+    # 出力
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(output_file), result)
+    print(f"保存: {output_file}")
+
+    return str(output_file)
 
 
 def extract_stamp(
@@ -283,8 +393,8 @@ def extract_stamp(
     _, contour_bin = cv2.threshold(contour, 127, 255, cv2.THRESH_BINARY)
 
     # 輪郭線を膨張させて確実に消す（線の太さの違いを吸収）
-    kernel = np.ones((5, 5), np.uint8)
-    contour_dilated = cv2.dilate(255 - contour_bin, kernel, iterations=2)
+    kernel = np.ones((7, 7), np.uint8)
+    contour_dilated = cv2.dilate(255 - contour_bin, kernel, iterations=3)
 
     # 差分計算: 元画像の線から輪郭の線を除去
     # 元画像の線（黒=0）で、輪郭にない部分を残す

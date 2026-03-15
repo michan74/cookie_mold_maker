@@ -138,6 +138,8 @@ def load_svg_paths(svg_file: str) -> list:
     for d in d_values:
         coords = parse_svg_path(d)
         if len(coords) >= 3:  # 最低3点必要
+            # Y座標を反転し、頂点順序を逆にして向きを維持
+            coords = [(x, -y) for x, y in reversed(coords)]
             paths.append(coords)
 
     return paths
@@ -163,9 +165,10 @@ def create_stamp_base(
         trimesh.Trimesh オブジェクト
     """
     from shapely.geometry import Polygon, box
+    from shapely.geometry.polygon import orient
 
-    # 輪郭からポリゴンを作成し、内側にオフセット
-    base_polygon = Polygon(outline)
+    # 輪郭からポリゴンを作成（向きを反時計回りに正規化）
+    base_polygon = orient(Polygon(outline), sign=1.0)
     plate_polygon = base_polygon.buffer(-plate_offset)
 
     if plate_polygon.is_empty:
@@ -185,8 +188,8 @@ def create_stamp_base(
     )
     handle_mesh = trimesh.creation.extrude_polygon(handle_polygon, handle_height)
 
-    # 取手を板の上に移動
-    handle_mesh.apply_translation([0, 0, plate_thickness])
+    # 取手を板の下に移動
+    handle_mesh.apply_translation([0, 0, -handle_height])
 
     # 板と取手を結合
     combined = trimesh.util.concatenate([plate_mesh, handle_mesh])
