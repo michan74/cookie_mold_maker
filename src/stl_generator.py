@@ -188,8 +188,8 @@ def create_stamp_base(
     )
     handle_mesh = trimesh.creation.extrude_polygon(handle_polygon, handle_height)
 
-    # 取手を板の下に移動
-    handle_mesh.apply_translation([0, 0, -handle_height])
+    # 取手を板の上に移動
+    handle_mesh.apply_translation([0, 0, plate_thickness])
 
     # 板と取手を結合
     combined = trimesh.util.concatenate([plate_mesh, handle_mesh])
