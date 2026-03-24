@@ -65,29 +65,24 @@ def process_image(
     step2_path = output_path / f"{name}_step2_normalized.png"
     normalize_lines(str(step1_path), str(step2_path))
 
-    # Step 3: 外枠と内側の分離
-    print("=== Step 3: 外枠と内側の分離 ===")
-    step3_path = output_path / f"{name}_step3_separated.png"
-    separate_outline(str(step2_path), str(step3_path))
+    # Step 3: クッキー型用枠の抽出 (OpenCV版)
+    print("=== Step 3: クッキー型用枠の抽出 ===")
+    step3_path = output_path / f"{name}_step3_contour.png"
+    extract_contour_cv(str(step2_path), str(step3_path))
 
-    # Step 4: クッキー型用枠の抽出 (OpenCV版)
-    print("=== Step 4: クッキー型用枠の抽出 ===")
-    step4_path = output_path / f"{name}_step4_contour.png"
-    extract_contour_cv(str(step3_path), str(step4_path))
-
-    # Step 5: スタンプ用画像の生成（スタンプ生成時のみ）
-    step5_path = None
+    # Step 4: スタンプ用画像の生成（スタンプ生成時のみ）
+    step4_path = None
     if generate_stamp:
-        print("=== Step 5: スタンプ用画像の生成 ===")
-        step5_raw_path = output_path / f"{name}_step5_stamp_raw.png"
-        extract_stamp(str(step3_path), str(step4_path), str(step5_raw_path))
+        print("=== Step 4: スタンプ用画像の生成 ===")
+        step4_raw_path = output_path / f"{name}_step4_stamp_raw.png"
+        extract_stamp(str(step2_path), str(step3_path), str(step4_raw_path))
 
-        # Step 6: スタンプ用画像の正規化
-        print("=== Step 6: スタンプ用画像の正規化 ===")
-        step5_path = output_path / f"{name}_step5_stamp.png"
-        normalize_lines(str(step5_raw_path), str(step5_path))
+        # Step 5: スタンプ用画像の正規化
+        print("=== Step 5: スタンプ用画像の正規化 ===")
+        step4_path = output_path / f"{name}_step4_stamp.png"
+        normalize_lines(str(step4_raw_path), str(step4_path))
 
-    image_path = str(step4_path)
+    image_path = str(step3_path)
 
     # 画像処理
     print("=== 画像処理 ===")
@@ -123,9 +118,9 @@ def process_image(
 
     # スタンプ用SVG生成
     stamp_svg_path = None
-    if generate_stamp and step5_path:
+    if generate_stamp and step4_path:
         print("=== SVG出力（スタンプ用）===")
-        stamp_image = load_image(str(step5_path))
+        stamp_image = load_image(str(step4_path))
         stamp_gray = to_grayscale(stamp_image)
         stamp_binary = to_binary(stamp_gray, threshold=200, blur_size=5)
         stamp_contours = find_contours(stamp_binary)
@@ -193,8 +188,8 @@ def main():
     parser.add_argument("--wall", type=float, default=1.0, help="壁の厚さ(mm)")
     parser.add_argument("--size", type=float, default=50.0, help="目標サイズ(mm)")
     parser.add_argument("--no-simplify", action="store_true", help="輪郭の簡略化を無効化（ピクセル単位の詳細な輪郭を使用）")
-    parser.add_argument("--epsilon", type=float, default=0.01, help="輪郭簡略化の係数（小さいほど詳細）")
-    parser.add_argument("--smoothing", type=float, default=0.2, help="スムージングの強さ")
+    parser.add_argument("--epsilon", type=float, default=0.002, help="輪郭簡略化の係数（小さいほど詳細）")
+    parser.add_argument("--smoothing", type=float, default=0.0, help="スムージングの強さ")
     # スタンプオプション
     parser.add_argument("--no-stamp", action="store_true", help="スタンプ生成をスキップ")
     parser.add_argument("--stamp-plate", type=float, default=3.0, help="スタンプ板の厚さ(mm)")

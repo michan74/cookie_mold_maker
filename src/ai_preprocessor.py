@@ -303,8 +303,10 @@ def extract_contour_cv(
 ) -> str:
     """輪郭抽出（クッキー型用）- OpenCV版
 
-    - 一番外側の輪郭のみを抽出
-    - 位置・サイズを元画像と完全に一致させる
+    内側エッジからのflood fillで外枠を抽出:
+    1. 外側からflood fillで外側領域をマーク
+    2. 外枠の内側エッジを検出
+    3. 内側領域を白で塗りつぶし → 外枠だけ残る
 
     Args:
         image_path: 入力画像のパス（線の正規化済みの画像）
@@ -322,24 +324,45 @@ def extract_contour_cv(
 
     # 画像を読み込み
     image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    h, w = image.shape
 
     # 二値化（白背景=255、黒線=0）
-    _, binary = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY_INV)
+    _, binary = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY)
 
-    # 輪郭検出
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Step 1: 外側からflood fillで外側領域をマーク
+    # 作業用にコピー（flood fillは画像を変更する）
+    flood_mask = binary.copy()
 
-    if not contours:
-        raise ValueError("輪郭が検出されませんでした")
+    # 4隅からflood fill（外側の白領域を灰色=128でマーク）
+    corners = [(0, 0), (w-1, 0), (0, h-1), (w-1, h-1)]
+    for x, y in corners:
+        if flood_mask[y, x] == 255:  # 白（背景）なら
+            cv2.floodFill(flood_mask, None, (x, y), 128)
 
-    # 最大面積の輪郭を取得（外枠）
-    largest_contour = max(contours, key=cv2.contourArea)
+    # 端の全周からもflood fill（隅だけでは届かない場合）
+    for x in range(w):
+        if flood_mask[0, x] == 255:
+            cv2.floodFill(flood_mask, None, (x, 0), 128)
+        if flood_mask[h-1, x] == 255:
+            cv2.floodFill(flood_mask, None, (x, h-1), 128)
+    for y in range(h):
+        if flood_mask[y, 0] == 255:
+            cv2.floodFill(flood_mask, None, (0, y), 128)
+        if flood_mask[y, w-1] == 255:
+            cv2.floodFill(flood_mask, None, (w-1, y), 128)
 
-    # 結果画像を作成（白背景）
-    result = np.ones_like(image) * 255
+    # Step 2: 内側領域を特定
+    # 128=外側、0=線、255=内側領域
+    inside_mask = (flood_mask == 255).astype(np.uint8) * 255
 
-    # 外枠のみを描画（黒線）
-    cv2.drawContours(result, [largest_contour], -1, 0, 2)
+    # Step 3: 内側領域の輪郭を検出し、その内部を全て白で塗りつぶす
+    contours, _ = cv2.findContours(inside_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    result = binary.copy()
+    if contours:
+        # 一番大きい内側領域（外枠の内側エッジ）で塗りつぶす
+        largest = max(contours, key=cv2.contourArea)
+        cv2.drawContours(result, [largest], -1, 255, -1)  # 内側を全て白で塗りつぶす
 
     # 出力
     output_file = Path(output_path)
