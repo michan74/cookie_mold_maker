@@ -254,7 +254,9 @@ def create_stamp_relief(
 def create_cookie_cutter(
     outline: list,
     height: float = 10.0,
-    wall_thickness: float = 1.0
+    wall_thickness: float = 1.0,
+    flange_width: float = 0.0,
+    flange_thickness: float = 1.0
 ) -> trimesh.Trimesh:
     """2D輪郭からクッキー型（抜き型）の3Dメッシュを生成
 
@@ -262,6 +264,8 @@ def create_cookie_cutter(
         outline: 輪郭の座標リスト [(x1, y1), (x2, y2), ...]
         height: 型の高さ (mm)
         wall_thickness: 壁の厚さ (mm)
+        flange_width: フランジの幅 (mm) - 壁の外側にはみ出す量。0で無効
+        flange_thickness: フランジの厚さ (mm)
 
     Returns:
         trimesh.Trimesh オブジェクト
@@ -279,7 +283,20 @@ def create_cookie_cutter(
     ring = outer.difference(inner)
 
     # 2Dポリゴンを3Dに押し出し
-    mesh = trimesh.creation.extrude_polygon(ring, height)
+    wall_mesh = trimesh.creation.extrude_polygon(ring, height)
+
+    # フランジを追加
+    if flange_width > 0:
+        # フランジは壁の外側にflange_width分はみ出す
+        flange_outer = base_polygon.buffer(wall_thickness / 2 + flange_width)
+        flange_ring = flange_outer.difference(inner)
+        flange_mesh = trimesh.creation.extrude_polygon(flange_ring, flange_thickness)
+        # フランジを壁の上部に配置
+        flange_mesh.apply_translation([0, 0, height])
+        # 壁とフランジを結合
+        mesh = trimesh.util.concatenate([wall_mesh, flange_mesh])
+    else:
+        mesh = wall_mesh
 
     return mesh
 
@@ -301,7 +318,9 @@ def svg_to_stl(
     output_file: str,
     height: float = 10.0,
     wall_thickness: float = 1.0,
-    target_size: float = 50.0
+    target_size: float = 50.0,
+    flange_width: float = 0.0,
+    flange_thickness: float = 1.0
 ) -> None:
     """SVGファイルからクッキー型のSTLを生成するメイン関数
 
@@ -311,6 +330,8 @@ def svg_to_stl(
         height: 型の高さ (mm)
         wall_thickness: 壁の厚さ (mm)
         target_size: 型の最大サイズ (mm) - 長辺がこのサイズになるようスケール
+        flange_width: フランジの幅 (mm) - 壁の外側にはみ出す量。0で無効
+        flange_thickness: フランジの厚さ (mm)
     """
     # SVGからパスを読み込み
     paths = load_svg_paths(svg_file)
@@ -337,7 +358,13 @@ def svg_to_stl(
     ]
 
     # クッキー型を生成
-    mesh = create_cookie_cutter(scaled_path, height, wall_thickness)
+    mesh = create_cookie_cutter(
+        scaled_path,
+        height,
+        wall_thickness,
+        flange_width=flange_width,
+        flange_thickness=flange_thickness
+    )
 
     # STLとして保存
     export_stl(mesh, output_file)

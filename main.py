@@ -23,8 +23,10 @@ def process_image(
     stl_height: float = 10.0,
     stl_wall_thickness: float = 1.0,
     stl_target_size: float = 50.0,
-    epsilon_ratio: float = 0.01,
+    epsilon_ratio: float = 0.002,
     smoothing: float = 0.2,
+    flange_width: float = 1.0,
+    flange_thickness: float = 1.0,
     stamp_plate_thickness: float = 3.0,
     stamp_handle_size: float = 10.0,
     stamp_handle_height: float = 15.0,
@@ -44,6 +46,8 @@ def process_image(
         stl_target_size: STLの目標サイズ(mm)
         epsilon_ratio: 輪郭簡略化の係数（0で簡略化を無効化）
         smoothing: スムージングの強さ
+        flange_width: フランジの幅(mm) - 壁の外側にはみ出す量
+        flange_thickness: フランジの厚さ(mm)
         stamp_plate_thickness: スタンプ板の厚さ(mm)
         stamp_handle_size: スタンプ取手の一辺(mm)
         stamp_handle_height: スタンプ取手の高さ(mm)
@@ -150,6 +154,8 @@ def process_image(
             height=stl_height,
             wall_thickness=stl_wall_thickness,
             target_size=stl_target_size,
+            flange_width=flange_width,
+            flange_thickness=flange_thickness,
         )
         print(f"クッキー型STL保存: {stl_path}")
         results.append(str(stl_path))
@@ -189,7 +195,10 @@ def main():
     parser.add_argument("--size", type=float, default=50.0, help="目標サイズ(mm)")
     parser.add_argument("--no-simplify", action="store_true", help="輪郭の簡略化を無効化（ピクセル単位の詳細な輪郭を使用）")
     parser.add_argument("--epsilon", type=float, default=0.002, help="輪郭簡略化の係数（小さいほど詳細）")
-    parser.add_argument("--smoothing", type=float, default=0.0, help="スムージングの強さ")
+    parser.add_argument("--smoothing", type=float, default=0.2, help="スムージングの強さ（0.1〜0.3推奨）")
+    # フランジオプション
+    parser.add_argument("--flange-width", type=float, default=1.0, help="フランジの幅(mm) - 壁の外側にはみ出す量。0で無効")
+    parser.add_argument("--flange-thickness", type=float, default=1.0, help="フランジの厚さ(mm)")
     # スタンプオプション
     parser.add_argument("--no-stamp", action="store_true", help="スタンプ生成をスキップ")
     parser.add_argument("--stamp-plate", type=float, default=3.0, help="スタンプ板の厚さ(mm)")
@@ -215,6 +224,8 @@ def main():
         stl_target_size=args.size,
         epsilon_ratio=0 if args.no_simplify else args.epsilon,
         smoothing=args.smoothing,
+        flange_width=args.flange_width,
+        flange_thickness=args.flange_thickness,
         stamp_plate_thickness=args.stamp_plate,
         stamp_handle_size=args.stamp_handle_size,
         stamp_handle_height=args.stamp_handle_height,
