@@ -217,3 +217,133 @@ def export_contours_to_svg(
     svg += "  </g>\n</svg>\n"
 
     path.write_text(svg, encoding="utf-8")
+
+
+def extract_contour_cv(
+    image_path: str,
+    output_path: str,
+) -> str:
+    """外枠抽出（クッキー型用）
+
+    内側エッジからのflood fillで外枠を抽出する。
+
+    処理:
+    1. 外側からflood fillで外側領域をマーク
+    2. 内側領域を特定（マークされなかった白い部分）
+    3. 内側領域を白で塗りつぶし → 外枠だけ残る
+
+    Args:
+        image_path: 入力画像のパス（線の正規化済みの画像）
+        output_path: 出力画像のパス
+
+    Returns:
+        出力画像のパス
+    """
+    path = Path(image_path)
+    if not path.exists():
+        raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
+
+    # 画像を読み込み
+    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    h, w = image.shape
+
+    # 二値化（白背景=255、黒線=0）
+    _, binary = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY)
+
+    # Step 1: 外側からflood fillで外側領域をマーク
+    flood_mask = binary.copy()
+
+    # 4隅からflood fill（外側の白領域を灰色=128でマーク）
+    corners = [(0, 0), (w-1, 0), (0, h-1), (w-1, h-1)]
+    for x, y in corners:
+        if flood_mask[y, x] == 255:
+            cv2.floodFill(flood_mask, None, (x, y), 128)
+
+    # 端の全周からもflood fill（隅だけでは届かない場合）
+    for x in range(w):
+        if flood_mask[0, x] == 255:
+            cv2.floodFill(flood_mask, None, (x, 0), 128)
+        if flood_mask[h-1, x] == 255:
+            cv2.floodFill(flood_mask, None, (x, h-1), 128)
+    for y in range(h):
+        if flood_mask[y, 0] == 255:
+            cv2.floodFill(flood_mask, None, (0, y), 128)
+        if flood_mask[y, w-1] == 255:
+            cv2.floodFill(flood_mask, None, (w-1, y), 128)
+
+    # Step 2: 内側領域を特定（128=外側、0=線、255=内側領域）
+    inside_mask = (flood_mask == 255).astype(np.uint8) * 255
+
+    # Step 3: 内側領域の輪郭を検出し、その内部を全て白で塗りつぶす
+    contours, _ = cv2.findContours(inside_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    result = binary.copy()
+    if contours:
+        # 一番大きい内側領域（外枠の内側エッジ）で塗りつぶす
+        largest = max(contours, key=cv2.contourArea)
+        cv2.drawContours(result, [largest], -1, 255, -1)
+
+    # 出力
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(output_file), result)
+    print(f"保存: {output_file}")
+
+    return str(output_file)
+
+
+def extract_stamp(
+    image_path: str,
+    contour_image_path: str,
+    output_path: str,
+) -> str:
+    """スタンプ用画像の抽出（外枠を除去）
+
+    元画像から外枠を差し引いて、内部の要素のみを残す。
+
+    処理:
+    1. 外枠画像を膨張（dilate）させて太くする
+    2. 元画像から膨張した外枠を差し引く
+    3. 内部の線だけが残る
+
+    Args:
+        image_path: 入力画像のパス（線の正規化済みの画像）
+        contour_image_path: 外枠画像のパス（extract_contour_cvで生成した画像）
+        output_path: 出力画像のパス
+
+    Returns:
+        出力画像のパス
+    """
+    path = Path(image_path)
+    contour_path = Path(contour_image_path)
+    if not path.exists():
+        raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
+    if not contour_path.exists():
+        raise FileNotFoundError(f"輪郭画像ファイルが見つかりません: {contour_image_path}")
+
+    # 画像を読み込み（グレースケール）
+    original = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    contour = cv2.imread(str(contour_path), cv2.IMREAD_GRAYSCALE)
+
+    # サイズを合わせる（必要な場合）
+    if original.shape != contour.shape:
+        contour = cv2.resize(contour, (original.shape[1], original.shape[0]))
+
+    # 二値化（白背景=255、黒線=0）
+    _, original_bin = cv2.threshold(original, 127, 255, cv2.THRESH_BINARY)
+    _, contour_bin = cv2.threshold(contour, 127, 255, cv2.THRESH_BINARY)
+
+    # 輪郭線を膨張させて確実に消す（線の太さの違いを吸収）
+    kernel = np.ones((7, 7), np.uint8)
+    contour_dilated = cv2.dilate(255 - contour_bin, kernel, iterations=3)
+
+    # 差分計算: 元画像の線から輪郭の線を除去
+    result = cv2.bitwise_or(original_bin, contour_dilated)
+
+    # 出力
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(output_file), result)
+    print(f"保存: {output_file}")
+
+    return str(output_file)

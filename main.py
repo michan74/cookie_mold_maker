@@ -10,6 +10,8 @@ from src.image_processor import (
     find_contours,
     get_largest_contour,
     export_contours_to_svg,
+    extract_contour_cv,
+    extract_stamp,
 )
 from src.stl_generator import svg_to_stl, svg_to_stamp_stl
 
@@ -60,7 +62,7 @@ def process_image(
 
     # Step 1: 背景削除
     print("=== Step 1: 背景削除 ===")
-    from src.ai_preprocessor import remove_background, normalize_lines, separate_outline, extract_contour, extract_contour_cv, extract_stamp
+    from src.ai_preprocessor import remove_background, normalize_lines, separate_outline, extract_contour
     step1_path = output_path / f"{name}_step1_bg_removed.png"
     remove_background(image_path, str(step1_path))
 
@@ -107,7 +109,8 @@ def process_image(
         largest = get_largest_contour(contours)
         contours_to_export = [largest] if largest is not None else []
 
-    # Step 4: SVG出力（クッキー型用）
+    # Step 6: SVG生成
+    # クッキー型用SVG生成
     print("=== SVG出力（クッキー型用）===")
     svg_path = output_path / f"{name}.svg"
     export_contours_to_svg(
@@ -144,7 +147,7 @@ def process_image(
 
     results = []
 
-    # Step 5: クッキー型STL生成
+    # Step 7: クッキー型STL生成
     if generate_stl:
         print("=== クッキー型STL生成 ===")
         stl_path = output_path / f"{name}.stl"
@@ -160,7 +163,7 @@ def process_image(
         print(f"クッキー型STL保存: {stl_path}")
         results.append(str(stl_path))
 
-    # Step 6: スタンプSTL生成
+    # Step 8: スタンプSTL生成
     if generate_stamp and stamp_svg_path:
         print("=== スタンプSTL生成 ===")
         stamp_stl_path = output_path / f"{name}_stamp.stl"
